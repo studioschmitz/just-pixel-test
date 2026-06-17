@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>JUST — Pixel / Blurry Squares effect (WebGL test)</title>
+<style>
+  :root{
+    --bg:#0c1014;
+    --panel:rgba(18,24,30,.86);
+    --line:rgba(255,255,255,.10);
+    --txt:#e8edf2;
+    --muted:#8a97a3;
+    --accent:#3b82f6;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--txt);
+    font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;}
+
+  /* The scroll-driven wrapper. Its height defines how much scroll = 0..100% progress.
+     The canvas inside is sticky so it stays in view while you scroll. */
+  .stage{position:relative;height:300vh;}
+  .sticky{position:sticky;top:0;height:100vh;width:100%;overflow:hidden;}
+  canvas{display:block;width:100%;height:100%;}
+
+  .hint{position:absolute;left:50%;bottom:26px;transform:translateX(-50%);
+    color:var(--muted);font-size:12px;letter-spacing:.04em;text-transform:uppercase;
+    pointer-events:none;text-align:center;width:100%;}
+
+  /* Layout: paneel links in een eigen gutter, beeld ernaast (geen overlap) */
+  body{padding-left:320px;transition:padding-left .25s ease;}
+  body.hidden{padding-left:0;}
+
+  /* Control panel */
+  .panel{position:fixed;top:14px;left:14px;width:288px;max-height:calc(100vh - 28px);
+    overflow:auto;background:var(--panel);backdrop-filter:blur(12px);
+    -webkit-backdrop-filter:blur(12px);border:1px solid var(--line);border-radius:14px;
+    padding:14px;z-index:10;box-shadow:0 12px 40px rgba(0,0,0,.45);
+    transition:transform .25s ease,opacity .25s ease;}
+  body.hidden .panel{transform:translateX(-115%);opacity:0;pointer-events:none;}
+
+  .toggle{position:fixed;top:18px;left:320px;z-index:11;border:1px solid var(--line);
+    background:var(--panel);color:var(--txt);border-radius:8px;padding:7px 11px;cursor:pointer;
+    font-size:12px;backdrop-filter:blur(12px);transition:left .25s ease;}
+  body.hidden .toggle{left:14px;}
+
+  @media (max-width:860px){
+    body,body.hidden{padding-left:0;}
+    .panel{left:8px;right:8px;width:auto;top:auto;bottom:8px;max-height:46vh;}
+    body.hidden .panel{transform:translateY(115%);}
+    .toggle{left:auto;right:14px;}
+    body.hidden .toggle{right:14px;left:auto;}
+  }
+  .panel h1{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);
+    margin:2px 0 12px;font-weight:600;}
+  .grp{margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--line);}
+  .grp:last-child{border-bottom:0;margin-bottom:0;padding-bottom:0;}
+  label.row{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:9px 0 4px;}
+  label.row span:first-child{color:var(--muted);font-size:12px;}
+  label.row span:last-child{font-variant-numeric:tabular-nums;color:var(--txt);font-size:12px;min-width:42px;text-align:right;}
+  input[type=range]{width:100%;accent-color:var(--accent);margin:0;}
+  .seg{display:flex;flex-wrap:wrap;gap:6px;}
+  .seg button{flex:1 1 auto;min-width:54px;padding:7px 8px;border:1px solid var(--line);
+    background:transparent;color:var(--muted);border-radius:8px;cursor:pointer;font-size:12px;
+    transition:.12s;}
+  .seg button:hover{color:var(--txt);border-color:rgba(255,255,255,.25);}
+  .seg button.on{background:var(--accent);border-color:var(--accent);color:#fff;}
+  .lbl{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin:0 0 6px;}
+  .file{display:block;font-size:12px;color:var(--muted);}
+  .file input{display:block;margin-top:5px;font-size:11px;color:var(--muted);max-width:100%;}
+  .note{color:var(--muted);font-size:11px;line-height:1.5;margin-top:8px;}
+  .drop{position:fixed;inset:0;z-index:20;display:none;align-items:center;justify-content:center;
+    background:rgba(8,12,16,.7);border:2px dashed var(--accent);color:#fff;font-size:18px;}
+  .drop.show{display:flex;}
+</style>
+</head>
+<body>
+
+<button class="toggle" id="toggle">‹ Paneel</button>
+
+<div class="stage" id="stage">
+  <div class="sticky">
+    <canvas id="gl"></canvas>
+    <div class="hint" id="hint">Scroll om het effect te sturen · beweeg de muis over het beeld</div>
+  </div>
+</div>
+
+<div class="panel">
+  <h1>JUST · Pixel effect</h1>
+
+  <div class="grp">
+    <div class="lbl">Trigger</div>
+    <div class="seg" id="mode">
+      <button data-mode="both" class="on">Beide</button>
+      <button data-mode="scroll">Scroll</button>
+      <button data-mode="hover">Hover</button>
+      <button data-mode="auto">Auto</button>
+      <button data-mode="manual">Handmatig</button>
+    </div>
+  </div>
+
+  <div class="grp">
+    <div class="lbl">Richting</div>
+    <div class="seg" id="dir">
+      <button data-dir="1" class="on">Blurry → scherp</button>
+      <button data-dir="-1">Scherp → blurry</button>
+    </div>
+  </div>
+
+  <div class="grp">
+    <div class="lbl">Weergave</div>
+    <div class="seg" id="fit">
+      <button data-fit="0" class="on">Vullen</button>
+      <button data-fit="1">Passen (heel beeld)</button>
+    </div>
+  </div>
+
+  <div class="grp">
+    <label class="row"><span>Squares over breedte</span><span id="vCount">28</span></label>
+    <input type="range" id="count" min="8" max="80" step="1" value="28" />
+
+    <label class="row"><span>Blur per square</span><span id="vBlur">0.30</span></label>
+    <input type="range" id="blur" min="0" max="2" step="0.05" value="0.3" />
+
+    <label class="row"><span>Grain</span><span id="vGrain">0.22</span></label>
+    <input type="range" id="grain" min="0" max="0.6" step="0.01" value="0.22" />
+  </div>
+
+  <div class="grp">
+    <label class="row"><span>Bedekking (rust)</span><span id="vRest">0.50</span></label>
+    <input type="range" id="rest" min="0" max="1" step="0.01" value="0.5" />
+
+    <label class="row"><span>Verloop / zachtheid</span><span id="vSoft">0.10</span></label>
+    <input type="range" id="soft" min="0.01" max="1" step="0.01" value="0.10" />
+
+    <label class="row"><span>Dither (scattered squares)</span><span id="vDither">0.45</span></label>
+    <input type="range" id="dither" min="0" max="1" step="0.01" value="0.45" />
+
+    <label class="row"><span>Richting verloop (°)</span><span id="vAngle">45</span></label>
+    <input type="range" id="angle" min="0" max="360" step="1" value="45" />
+  </div>
+
+  <div class="grp">
+    <label class="row"><span>Hover radius</span><span id="vHr">0.28</span></label>
+    <input type="range" id="hr" min="0.05" max="0.8" step="0.01" value="0.28" />
+
+    <label class="row"><span>Hover sterkte</span><span id="vHs">0.6</span></label>
+    <input type="range" id="hs" min="0" max="1" step="0.05" value="0.6" />
+  </div>
+
+  <div class="grp" id="manualGrp" style="display:none">
+    <label class="row"><span>Progress (handmatig)</span><span id="vProg">0.50</span></label>
+    <input type="range" id="prog" min="0" max="1" step="0.01" value="0.5" />
+  </div>
+
+  <div class="grp">
+    <div class="lbl">Beeld</div>
+    <div class="seg" id="presets">
+      <button data-img="https://picsum.photos/id/1015/1200/1600">Rivier</button>
+      <button data-img="https://picsum.photos/id/1016/1200/1600">Canyon</button>
+      <button data-img="https://picsum.photos/id/103/1200/1600">Kust</button>
+    </div>
+    <label class="file" style="margin-top:8px">Eigen beeld (drag & drop kan ook)
+      <input type="file" id="upload" accept="image/*" />
+    </label>
+    <p class="note">Tip: sleep je eigen JUST-beeld (zoals de windmolen) op de pagina om het effect daarop te testen.</p>
+  </div>
+</div>
+
+<div class="drop" id="drop">Laat los om beeld te laden</div>
+
+<script type="module">
+/* =====================================================================
+   JUST — "blurry squares" pixel effect
+   Vanilla WebGL (WebGL1, no dependencies). One fragment shader doet alles:
+   - mosaic / pixelate met instelbare square-grootte
+   - zachte (blurry) squares via meervoudige sampling per cel
+   - film-grain per cel
+   - gradueel masker (richting + zachtheid) -> de squares lopen geleidelijk
+     over in de scherpe foto
+   - progress (0..1) gestuurd door scroll / hover / auto / handmatig
+   - richting omkeerbaar (blurry->scherp of scherp->blurry)
+   Porten naar Webflow/Lumos: zie notitie onderaan dit bestand.
+   ===================================================================== */
+
+const canvas = document.getElementById('gl');
+const gl = canvas.getContext('webgl', {antialias:true, premultipliedAlpha:false});
+if(!gl){ document.body.innerHTML = '<p style="padding:40px">WebGL niet beschikbaar in deze browser.</p>'; }
+
+/* ---------- shaders ---------- */
+const VERT = `
+attribute vec2 aPos;
+varying vec2 vUv;
+void main(){
+  vUv = aPos * 0.5 + 0.5;          // 0..1
+  gl_Position = vec4(aPos, 0.0, 1.0);
+}`;
+
+const FRAG = `
+precision highp float;
+varying vec2 vUv;
+
+uniform sampler2D uTex;
+uniform vec2  uRes;        // canvas px
+uniform vec2  uImg;        // image px
+uniform float uCell;       // square size in screen px
+uniform float uBlur;       // softness per square (0..2)
+uniform float uGrain;      // grain amount
+uniform float uRest;       // resting coverage 0..1 (basis sweep)
+uniform float uSoft;       // gradient softness
+uniform float uDither;     // per-cel jitter op de rand (scattered squares)
+uniform float uAngle;      // gradient direction (radians)
+uniform float uProgress;   // master 0..1
+uniform float uDir;        // +1 = blurry->sharp, -1 = sharp->blurry
+uniform vec2  uMouse;      // 0..1
+uniform float uHoverOn;
+uniform float uHoverR;
+uniform float uHoverS;
+uniform float uFit;        // 0 = vullen (cover), 1 = passen (contain, met letterbox)
+
+/* map screen-uv -> image-uv voor cover of contain */
+vec2 fitUv(vec2 uv){
+  float ca = uRes.x/uRes.y, ia = uImg.x/uImg.y;
+  if(uFit > 0.5){                                   // contain
+    vec2 s = (ca > ia) ? vec2(ia/ca, 1.0) : vec2(1.0, ca/ia);
+    return (uv - 0.5)/s + 0.5;
+  }
+  vec2 r = vec2(min(ca/ia, 1.0), min(ia/ca, 1.0));  // cover
+  return vec2(uv.x*r.x + (1.0-r.x)*0.5, uv.y*r.y + (1.0-r.y)*0.5);
+}
+bool inFrame(vec2 uv){ vec2 p=fitUv(uv); return p.x>=0.0&&p.x<=1.0&&p.y>=0.0&&p.y<=1.0; }
+vec3 sampleImg(vec2 uv){ return texture2D(uTex, clamp(fitUv(uv),0.0,1.0)).rgb; }
+
+float hash(vec2 p){
+  p = fract(p*vec2(123.34, 456.21));
+  p += dot(p, p+45.32);
+  return fract(p.x*p.y);
+}
+
+void main(){
+  // letterbox bij 'passen'
+  if(uFit > 0.5 && !inFrame(vUv)){ gl_FragColor = vec4(0.047,0.063,0.078,1.0); return; }
+
+  vec2 cells = uRes / max(uCell, 1.0);          // aantal cellen op scherm
+  vec2 cellC = (floor(vUv*cells)+0.5)/cells;     // celcentrum (scherm-uv)
+
+  // --- sharp ---
+  vec3 sharp = sampleImg(vUv);
+
+  // --- mosaic met zachte (blurry) squares: gewogen samples rond celcentrum ---
+  vec3 mos = vec3(0.0); float wsum = 0.0;
+  for(int y=-2;y<=2;y++){
+    for(int x=-2;x<=2;x++){
+      vec2 off = vec2(float(x),float(y))/cells * uBlur;
+      float w = exp(-float(x*x+y*y)*0.6);
+      mos += sampleImg(cellC + off) * w;
+      wsum += w;
+    }
+  }
+  mos /= wsum;
+
+  // fijne per-pixel film-grain (zoals in de PSD, ~7%)
+  float g = (hash(floor(gl_FragCoord.xy)) - 0.5) * uGrain;
+  mos += g;
+
+  // --- gradueel masker langs een richting ---
+  vec2 dir = vec2(cos(uAngle), sin(uAngle));
+  float proj = dot(vUv-0.5, dir);
+  float ext = 0.5*(abs(dir.x)+abs(dir.y));
+  float grad = clamp(proj/(2.0*ext)+0.5, 0.0, 1.0);   // 0..1 over het beeld
+
+  // --- sweep (progress) + hover ---
+  float sweep = mix(uRest, uProgress, 1.0);            // master komt binnen als uProgress
+  float dirSweep = (uDir > 0.0) ? sweep : (1.0 - sweep);
+
+  if(uHoverOn > 0.5){
+    float asp = uRes.x/uRes.y;
+    float d = distance(vec2(vUv.x*asp, vUv.y), vec2(uMouse.x*asp, uMouse.y));
+    dirSweep += smoothstep(uHoverR, 0.0, d) * uHoverS;
+  }
+  dirSweep = clamp(dirSweep, 0.0, 1.0);
+
+  // boundary loopt volledig over het beeld; uSoft maakt de overgang gradueel.
+  // per-cel jitter (uDither) laat losse squares het scherpe gebied in spatten,
+  // precies zoals de PSD-rand i.p.v. een gladde lijn.
+  float jit = (hash(floor(vUv*cells)+vec2(7.3,1.9)) - 0.5) * uDither;
+  float gradD = clamp(grad + jit, 0.0, 1.0);
+  float boundary = mix(1.0 + uSoft + uDither, -uSoft - uDither, dirSweep);
+  float pix = smoothstep(boundary + uSoft, boundary - uSoft, gradD);
+
+  vec3 col = mix(sharp, mos, pix);
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+function compile(type, src){
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src); gl.compileShader(s);
+  if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(s));
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, compile(gl.VERTEX_SHADER, VERT));
+gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FRAG));
+gl.linkProgram(prog);
+gl.useProgram(prog);
+
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+const aPos = gl.getAttribLocation(prog, 'aPos');
+gl.enableVertexAttribArray(aPos);
+gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+const U = {};
+['uTex','uRes','uImg','uCell','uBlur','uGrain','uRest','uSoft','uDither','uAngle','uProgress','uDir','uMouse','uHoverOn','uHoverR','uHoverS','uFit']
+  .forEach(n => U[n] = gl.getUniformLocation(prog, n));
+
+/* ---------- texture ---------- */
+const tex = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, tex);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([20,28,36,255]));
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+let imgRes = [1200,1600];
+
+function loadImage(src){
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    imgRes = [img.naturalWidth, img.naturalHeight];
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+  };
+  img.onerror = () => console.warn('beeld laden mislukt:', src);
+  img.src = src;
+}
+loadImage('https://picsum.photos/id/1015/1200/1600');
+
+/* ---------- state ---------- */
+const S = {
+  // defaults afgeleid uit de PSD: ~28 squares over de breedte, fijne grain ~7%,
+  // diagonale 45° dissolve met dither-rand.
+  mode:'both', dir:1, fit:0, count:28, blur:0.3, grain:0.22,
+  rest:0.5, soft:0.10, dither:0.45, angle:45, hr:0.28, hs:0.6, prog:0.5
+};
+let mouse = [0.5,0.5], hoverActive = false;
+let progress = S.rest;          // gesmoothde master
+let autoT = 0;
+
+/* ---------- resize ---------- */
+function resize(){
+  const dpr = Math.min(window.devicePixelRatio||1, 2);
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  canvas.width = Math.round(w*dpr); canvas.height = Math.round(h*dpr);
+  gl.viewport(0,0,canvas.width,canvas.height);
+}
+window.addEventListener('resize', resize);
+
+/* ---------- input ---------- */
+canvas.addEventListener('mousemove', e=>{
+  const r = canvas.getBoundingClientRect();
+  mouse = [(e.clientX-r.left)/r.width, 1.0-(e.clientY-r.top)/r.height];
+  hoverActive = true;
+});
+canvas.addEventListener('mouseleave', ()=> hoverActive=false);
+
+function scrollProgress(){
+  const st = document.getElementById('stage');
+  const max = st.offsetHeight - window.innerHeight;
+  return max>0 ? Math.min(Math.max(window.scrollY/max,0),1) : 0;
+}
+
+/* ---------- render loop ---------- */
+function frame(){
+  // bepaal target progress per mode
+  let target = S.rest;
+  if(S.mode==='scroll' || S.mode==='both') target = scrollProgress();
+  else if(S.mode==='manual') target = S.prog;
+  else if(S.mode==='auto'){ autoT += 0.006; target = 0.5 - 0.5*Math.cos(autoT); }
+  else if(S.mode==='hover') target = S.rest;
+
+  progress += (target - progress) * 0.12;   // smoothing
+
+  const hoverOn = (S.mode==='hover' || S.mode==='both') && hoverActive ? 1 : 0;
+
+  resizeIfNeeded();
+  gl.uniform2f(U.uRes, canvas.width, canvas.height);
+  gl.uniform2f(U.uImg, imgRes[0], imgRes[1]);
+  gl.uniform1f(U.uCell, canvas.width / S.count);   // square-px = breedte / aantal squares
+  gl.uniform1f(U.uBlur, S.blur);
+  gl.uniform1f(U.uGrain, S.grain);
+  gl.uniform1f(U.uRest, S.rest);
+  gl.uniform1f(U.uSoft, S.soft);
+  gl.uniform1f(U.uDither, S.dither);
+  gl.uniform1f(U.uAngle, S.angle*Math.PI/180);
+  gl.uniform1f(U.uProgress, progress);
+  gl.uniform1f(U.uDir, S.dir);
+  gl.uniform2f(U.uMouse, mouse[0], mouse[1]);
+  gl.uniform1f(U.uHoverOn, hoverOn);
+  gl.uniform1f(U.uHoverR, S.hr);
+  gl.uniform1f(U.uHoverS, S.hs);
+  gl.uniform1f(U.uFit, S.fit);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.uniform1i(U.uTex, 0);
+
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  requestAnimationFrame(frame);
+}
+let lastW=0,lastH=0;
+function resizeIfNeeded(){
+  if(canvas.clientWidth!==lastW || canvas.clientHeight!==lastH){
+    resize(); lastW=canvas.clientWidth; lastH=canvas.clientHeight;
+  }
+}
+resize(); requestAnimationFrame(frame);
+
+/* ---------- UI wiring ---------- */
+const $ = id => document.getElementById(id);
+function slider(id, key, fmt=(v)=>v){
+  const el=$(id), out=$('v'+id.charAt(0).toUpperCase()+id.slice(1));
+  const sync=()=>{ S[key]=parseFloat(el.value); if(out) out.textContent=fmt(S[key]); };
+  el.addEventListener('input', sync); sync();
+}
+slider('count','count', v=>v.toFixed(0));
+slider('blur','blur', v=>v.toFixed(2));
+slider('grain','grain', v=>v.toFixed(2));
+slider('rest','rest', v=>v.toFixed(2));
+slider('soft','soft', v=>v.toFixed(2));
+slider('dither','dither', v=>v.toFixed(2));
+slider('angle','angle', v=>v.toFixed(0));
+slider('hr','hr', v=>v.toFixed(2));
+slider('hs','hs', v=>v.toFixed(2));
+slider('prog','prog', v=>v.toFixed(2));
+
+document.getElementById('mode').addEventListener('click', e=>{
+  const b=e.target.closest('button'); if(!b) return;
+  S.mode=b.dataset.mode;
+  document.querySelectorAll('#mode button').forEach(x=>x.classList.toggle('on',x===b));
+  $('manualGrp').style.display = S.mode==='manual' ? 'block':'none';
+  const hints={both:'Scroll + beweeg de muis over het beeld',scroll:'Scroll om het effect te sturen',
+    hover:'Beweeg de muis over het beeld',auto:'Speelt automatisch heen en weer',manual:'Gebruik de Progress-slider'};
+  $('hint').textContent = hints[S.mode];
+});
+document.getElementById('dir').addEventListener('click', e=>{
+  const b=e.target.closest('button'); if(!b) return;
+  S.dir=parseFloat(b.dataset.dir);
+  document.querySelectorAll('#dir button').forEach(x=>x.classList.toggle('on',x===b));
+});
+document.getElementById('fit').addEventListener('click', e=>{
+  const b=e.target.closest('button'); if(!b) return;
+  S.fit=parseFloat(b.dataset.fit);
+  document.querySelectorAll('#fit button').forEach(x=>x.classList.toggle('on',x===b));
+});
+
+// paneel in-/uitklappen (knop + toets H)
+const toggle=document.getElementById('toggle');
+function setHidden(h){ document.body.classList.toggle('hidden',h); toggle.textContent = h ? 'Paneel ›' : '‹ Paneel'; }
+toggle.addEventListener('click', ()=> setHidden(!document.body.classList.contains('hidden')));
+window.addEventListener('keydown', e=>{ if(e.key==='h'||e.key==='H') setHidden(!document.body.classList.contains('hidden')); });
+document.getElementById('presets').addEventListener('click', e=>{
+  const b=e.target.closest('button'); if(!b) return;
+  loadImage(b.dataset.img);
+});
+document.getElementById('upload').addEventListener('change', e=>{
+  const f=e.target.files[0]; if(f) loadImage(URL.createObjectURL(f));
+});
+
+/* drag & drop */
+const drop=$('drop');
+['dragenter','dragover'].forEach(ev=>window.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('show');}));
+['dragleave','drop'].forEach(ev=>window.addEventListener(ev,e=>{e.preventDefault();if(ev==='drop'||e.target===drop)drop.classList.remove('show');}));
+window.addEventListener('drop',e=>{
+  e.preventDefault(); drop.classList.remove('show');
+  const f=e.dataTransfer.files[0]; if(f && f.type.startsWith('image/')) loadImage(URL.createObjectURL(f));
+});
+</script>
+
+<!--
+  PORTEN NAAR WEBFLOW + LUMOS
+  ===========================
+  1. Plaats een <canvas> in een sectie (bv. een Embed-element, of een div met
+     id="just-fx" waar je de canvas in injecteert).
+  2. Zet de hele <script> in een Embed/site-wide custom code (footer).
+  3. Beeld: lees een data-attribuut, bv. <div data-just-fx data-src="...">,
+     i.p.v. de picsum-presets. Past bij de data-attribuut-stijl van Lumos/Slater.
+  4. Scroll-progress kun je laten aansturen door Webflow Interactions of gewoon
+     deze scrollProgress() houden. Hover werkt 1-op-1.
+  5. Performance: pauzeer de requestAnimationFrame-loop met een IntersectionObserver
+     als de sectie niet in beeld is.
+-->
+</body>
+</html>
