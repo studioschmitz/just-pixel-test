@@ -127,8 +127,8 @@
   </div>
 
   <div class="grp">
-    <label class="row"><span>Bedekking (rust)</span><span id="vRest">0.50</span></label>
-    <input type="range" id="rest" min="0" max="1" step="0.01" value="0.5" />
+    <label class="row"><span>Coverage (squares reiken tot)</span><span id="vCoverage">0.50</span></label>
+    <input type="range" id="coverage" min="0" max="1" step="0.01" value="0.5" />
 
     <label class="row"><span>Verloop / zachtheid</span><span id="vSoft">0.10</span></label>
     <input type="range" id="soft" min="0.01" max="1" step="0.01" value="0.10" />
@@ -206,7 +206,7 @@ uniform vec2  uImg;        // image px
 uniform float uCell;       // square size in screen px
 uniform float uBlur;       // softness per square (0..2)
 uniform float uGrain;      // grain amount
-uniform float uRest;       // resting coverage 0..1 (basis sweep)
+uniform float uCoverage;   // ontwerp-coverage 0..1: hoever de squares reiken in de pixel-staat
 uniform float uSoft;       // gradient softness
 uniform float uDither;     // per-cel jitter op de rand (scattered squares)
 uniform float uAngle;      // gradient direction (radians)
@@ -269,23 +269,25 @@ void main(){
   float ext = 0.5*(abs(dir.x)+abs(dir.y));
   float grad = clamp(proj/(2.0*ext)+0.5, 0.0, 1.0);   // 0..1 over het beeld
 
-  // --- sweep (progress) + hover ---
-  float sweep = mix(uRest, uProgress, 1.0);            // master komt binnen als uProgress
-  float dirSweep = (uDir > 0.0) ? sweep : (1.0 - sweep);
+  // --- animatie (progress) + hover ---
+  // dirSweep: 0 = ontwerp-staat (squares tot uCoverage), 1 = volledig scherp.
+  float dirSweep = (uDir > 0.0) ? uProgress : (1.0 - uProgress);
 
   if(uHoverOn > 0.5){
     float asp = uRes.x/uRes.y;
     float d = distance(vec2(vUv.x*asp, vUv.y), vec2(uMouse.x*asp, uMouse.y));
-    dirSweep += smoothstep(uHoverR, 0.0, d) * uHoverS;
+    dirSweep += smoothstep(uHoverR, 0.0, d) * uHoverS;   // hover onthult scherp lokaal
   }
   dirSweep = clamp(dirSweep, 0.0, 1.0);
 
-  // boundary loopt volledig over het beeld; uSoft maakt de overgang gradueel.
-  // per-cel jitter (uDither) laat losse squares het scherpe gebied in spatten,
-  // precies zoals de PSD-rand i.p.v. een gladde lijn.
+  // per-cel jitter (uDither) laat losse squares de rand in spatten (geen gladde lijn).
   float jit = (hash(floor(vUv*cells)+vec2(7.3,1.9)) - 0.5) * uDither;
   float gradD = clamp(grad + jit, 0.0, 1.0);
-  float boundary = mix(1.0 + uSoft + uDither, -uSoft - uDither, dirSweep);
+
+  // boundary loopt van de ONTWERP-coverage (uCoverage) naar volledig scherp.
+  // Nooit het hele beeld: bij dirSweep=0 reiken de squares tot uCoverage en
+  // lopen ze af via de gradient (uSoft) + dither.
+  float boundary = mix(uCoverage, -uSoft - uDither, dirSweep);
   float pix = smoothstep(boundary + uSoft, boundary - uSoft, gradD);
 
   vec3 col = mix(sharp, mos, pix);
@@ -312,7 +314,7 @@ gl.enableVertexAttribArray(aPos);
 gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
 
 const U = {};
-['uTex','uRes','uImg','uCell','uBlur','uGrain','uRest','uSoft','uDither','uAngle','uProgress','uDir','uMouse','uHoverOn','uHoverR','uHoverS','uFit']
+['uTex','uRes','uImg','uCell','uBlur','uGrain','uCoverage','uSoft','uDither','uAngle','uProgress','uDir','uMouse','uHoverOn','uHoverR','uHoverS','uFit']
   .forEach(n => U[n] = gl.getUniformLocation(prog, n));
 
 /* ---------- texture ---------- */
@@ -344,10 +346,10 @@ const S = {
   // defaults afgeleid uit de PSD: ~28 squares over de breedte, fijne grain ~7%,
   // diagonale 45° dissolve met dither-rand.
   mode:'both', dir:1, fit:0, count:28, blur:0.3, grain:0.22,
-  rest:0.5, soft:0.10, dither:0.45, angle:45, hr:0.28, hs:0.6, prog:0.5
+  coverage:0.5, soft:0.10, dither:0.45, angle:45, hr:0.28, hs:0.6, prog:0.5
 };
 let mouse = [0.5,0.5], hoverActive = false;
-let progress = S.rest;          // gesmoothde master
+let progress = 0;               // gesmoothde animatie (0 = ontwerp-staat)
 let autoT = 0;
 
 /* ---------- resize ---------- */
@@ -375,12 +377,12 @@ function scrollProgress(){
 
 /* ---------- render loop ---------- */
 function frame(){
-  // bepaal target progress per mode
-  let target = S.rest;
+  // target progress per mode. 0 = ontwerp-staat (squares tot coverage), 1 = scherp.
+  let target = 0;
   if(S.mode==='scroll' || S.mode==='both') target = scrollProgress();
   else if(S.mode==='manual') target = S.prog;
   else if(S.mode==='auto'){ autoT += 0.006; target = 0.5 - 0.5*Math.cos(autoT); }
-  else if(S.mode==='hover') target = S.rest;
+  else if(S.mode==='hover') target = 0;   // rust = ontwerp-staat, hover onthult scherp
 
   progress += (target - progress) * 0.12;   // smoothing
 
@@ -392,7 +394,7 @@ function frame(){
   gl.uniform1f(U.uCell, canvas.width / S.count);   // square-px = breedte / aantal squares
   gl.uniform1f(U.uBlur, S.blur);
   gl.uniform1f(U.uGrain, S.grain);
-  gl.uniform1f(U.uRest, S.rest);
+  gl.uniform1f(U.uCoverage, S.coverage);
   gl.uniform1f(U.uSoft, S.soft);
   gl.uniform1f(U.uDither, S.dither);
   gl.uniform1f(U.uAngle, S.angle*Math.PI/180);
@@ -428,7 +430,7 @@ function slider(id, key, fmt=(v)=>v){
 slider('count','count', v=>v.toFixed(0));
 slider('blur','blur', v=>v.toFixed(2));
 slider('grain','grain', v=>v.toFixed(2));
-slider('rest','rest', v=>v.toFixed(2));
+slider('coverage','coverage', v=>v.toFixed(2));
 slider('soft','soft', v=>v.toFixed(2));
 slider('dither','dither', v=>v.toFixed(2));
 slider('angle','angle', v=>v.toFixed(0));
